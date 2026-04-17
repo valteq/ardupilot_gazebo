@@ -119,6 +119,11 @@ void SocketUDP::get_client_address(const char *&ip_addr, uint16_t &port) {
     port = ntohs(in_addr.sin_port);
 }
 
+void SocketUDP::get_client_address_str(std::string &ip_addr, uint16_t &port) {
+    ip_addr = inet_ntoa(in_addr.sin_addr);
+    port = ntohs(in_addr.sin_port);
+}
+
 
 bool SocketUDP::pollin(uint32_t timeout_ms) {
     fd_set fds;
