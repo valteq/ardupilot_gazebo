@@ -62,6 +62,7 @@ public:
     ssize_t recv(void *pkt, size_t size, uint32_t timeout_ms);
 
     /// \brief Get last client address and port (raw pointer, shared static buffer)
+    [[deprecated("use get_client_address_str; raw variant returns pointer into shared static buffer")]]
     void get_client_address(const char *&ip_addr, uint16_t &port);
 
     /// \brief Get last client address and port (copies address into std::string)
