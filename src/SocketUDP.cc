@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 
 SocketUDP::SocketUDP(bool reuseaddress, bool blocking) {
@@ -114,13 +115,10 @@ ssize_t SocketUDP::recv(void *buf, size_t size, uint32_t timeout_ms) {
 }
 
 
-void SocketUDP::get_client_address(const char *&ip_addr, uint16_t &port) {
-    ip_addr = inet_ntoa(in_addr.sin_addr);
-    port = ntohs(in_addr.sin_port);
-}
-
 void SocketUDP::get_client_address_str(std::string &ip_addr, uint16_t &port) {
-    ip_addr = inet_ntoa(in_addr.sin_addr);
+    char buffer[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &in_addr.sin_addr, buffer, INET_ADDRSTRLEN);
+    ip_addr = buffer;
     port = ntohs(in_addr.sin_port);
 }
 
