@@ -15,6 +15,14 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+// ArduPilot's SITL models a pack the same way, in SIM_Battery, and this file
+// deliberately does not reuse it: ArduPilot is GPL-3.0 while this repository
+// is LGPL-3.0, so copying that code would force the whole combined work to
+// GPL-3.0 and shut the door on contributing any of this back upstream. Read
+// it for reference if you like -- the maths below (coulomb counting, an OCV
+// table, an I*R drop, a single-pole filter) is the textbook model both arrive
+// at -- but write the code here, from cell data we own.
+
 #include "BatteryModel.hh"
 
 #include <algorithm>
