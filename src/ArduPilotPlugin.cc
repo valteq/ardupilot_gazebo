@@ -452,14 +452,23 @@ void gz::sim::systems::ArduPilotPlugin::Reset(const UpdateInfo &_info,
       }
     }
 
-    // The battery reads rotor speed, which is a different component from the
-    // command above and is not otherwise required by this plugin.
+    // The battery reads rotor speed. getJointByName() already adds this
+    // component at load time; re-enable it here because a world reset can
+    // take it away, as it does the ones above.
     if (this->dataPtr->batteryEnabled &&
         this->dataPtr->controls[i].type == "VELOCITY")
     {
       enableComponent<components::JointVelocity>(
           _ecm, this->dataPtr->controls[i].joint, true);
     }
+  }
+
+  // A reset hands ArduPilot a fresh aircraft, so hand it a fresh pack too.
+  // Otherwise the charge burnt before the reset carries over and a few resets
+  // into a session the aircraft is flat on the ground.
+  if (this->dataPtr->batteryEnabled)
+  {
+    this->dataPtr->battery.Reset();
   }
 }
 
@@ -564,6 +573,17 @@ void gz::sim::systems::ArduPilotPlugin::Configure(
           << "battery: " << cells << "S, " << capacityAh << " Ah, "
           << resistance << " ohm, max " << maxCurrent << " A, "
           << "powerCoefficient " << this->dataPtr->powerCoefficient << "\n";
+
+    // Without a coefficient the pack draws nothing, which looks exactly like
+    // the problem this element exists to fix -- and worse, ArduPilot now takes
+    // our reading instead of its own fallback, so nothing else reports a load.
+    if (this->dataPtr->powerCoefficient <= 0.0)
+    {
+      gzwarn << "[" << this->dataPtr->modelName << "] "
+             << "battery has no positive <powerCoefficient>: the pack will "
+             << "report 0 A and a voltage that never moves. See the README "
+             << "for how to calibrate it.\n";
+    }
   }
 
   // Add the signal handler
@@ -1482,12 +1502,23 @@ void gz::sim::systems::ArduPilotPlugin::ApplyMotorForces(
       {
         continue;
       }
-      const double speed = std::fabs(vComp->Data()[0]);
+      // The joint runs at the real rotor speed divided by this factor (see
+      // the command path above), so multiply it back out. Without this the
+      // coefficient would absorb the factor -- which works only while every
+      // rotor shares one value, and silently mis-weights them when they differ.
+      const double speed = std::fabs(vComp->Data()[0]) *
+          this->dataPtr->controls[i].rotorVelocitySlowdownSim;
       rotorSpeedCubed += speed * speed * speed;
     }
 
+    // ApplyMotorForces is only called while ArduPilot is connected, and
+    // lastControllerUpdateTime only advances then, so the first step after a
+    // late connection or a reconnection carries the whole gap. Discharging a
+    // minute of hover in one step would be a visible drop; cap what the pack
+    // can see in a single step.
     this->dataPtr->battery.Update(
-        this->dataPtr->powerCoefficient * rotorSpeedCubed, _dt);
+        this->dataPtr->powerCoefficient * rotorSpeedCubed,
+        std::min(_dt, 0.1));
   }
 }
 

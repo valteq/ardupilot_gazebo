@@ -56,6 +56,10 @@ constexpr double kOcvVolt[kOcvPoints] = {
 constexpr double kCurrentFilterHz = 10.0;
 
 constexpr double kPi = 3.14159265358979323846;
+
+/// Floor on the reported terminal voltage. Below zero the model would latch,
+/// and at or below zero SITL stops believing the FDM has a battery at all.
+constexpr double kMinVoltage = 0.1;
 }  // namespace
 
 double BatteryModel::OcvPerCell(double _soc)
@@ -130,8 +134,15 @@ void BatteryModel::Update(double _elecPowerW, double _dt)
       std::max(0.0, this->remainingAh - this->current * _dt / 3600.0);
 
   const double soc = this->remainingAh / this->capacityAh;
-  this->voltage =
-      this->cells * OcvPerCell(soc) - this->current * this->resistance;
+
+  // Keep the terminal voltage positive whatever resistance and current clamp
+  // the model was given. A non-positive reading would latch -- it feeds back
+  // as the divisor on the next step, pinning the current at its clamp -- and
+  // SITL reads voltage <= 0 as "the FDM has no battery", quietly falling back
+  // to its own model.
+  this->voltage = std::max(
+      this->cells * OcvPerCell(soc) - this->current * this->resistance,
+      kMinVoltage);
 }
 
 double BatteryModel::Voltage() const

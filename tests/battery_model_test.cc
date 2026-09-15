@@ -145,6 +145,20 @@ void TestZeroCapacityPinsVoltage()
         "an unlimited pack still reports the current drawn");
 }
 
+void TestVoltageStaysPositive()
+{
+  // A pack configured with an implausible resistance: 200 A through 0.5 ohm
+  // is 100 V of sag against a 25 V pack.
+  BatteryModel battery;
+  battery.Setup(6.0, 20.89770474, 0.5, 200.0);
+  RunSeconds(battery, 5000.0, 30.0);
+
+  Check(battery.Voltage() > 0.0,
+        "terminal voltage never reaches zero, whatever the configuration");
+  Check(battery.SocPct() > 0.0,
+        "the pack is not flattened by the voltage floor alone");
+}
+
 void TestPausedSimulationDoesNotDischarge()
 {
   BatteryModel battery = MakePack();
@@ -190,6 +204,7 @@ int main()
   TestCurrentIsClamped();
   TestEmptyPackStaysSane();
   TestZeroCapacityPinsVoltage();
+  TestVoltageStaysPositive();
   TestPausedSimulationDoesNotDischarge();
 
   if (failures != 0)
