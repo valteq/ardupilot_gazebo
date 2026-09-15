@@ -59,6 +59,8 @@
 
 #include <sdf/sdf.hh>
 
+#include "BatteryModel.hh"
+
 #include "SocketUDP.hh"
 #include "Util.hh"
 
@@ -246,6 +248,19 @@ class gz::sim::systems::ArduPilotPluginPrivate
 
   /// \brief Set true to prevent SITL from trying to sync with wall-time
   public: bool isNoTimeSync{true};
+
+  /// \brief Simulated battery pack. Only fed and reported when the model's
+  /// plugin declares a <battery> element; without one the state packet keeps
+  /// its upstream shape and ArduPilot falls back to its own battery model.
+  public: bool batteryEnabled{false};
+
+  /// \brief The pack itself, driven by the rotors' electrical draw.
+  public: BatteryModel battery;
+
+  /// \brief Watts drawn per (rad/s)^3 of rotor speed, summed over the rotors.
+  /// A propeller's power goes as the cube of its speed, so one coefficient
+  /// covers hover, climb and cruise; calibrate it at hover (see plan.md).
+  public: double powerCoefficient{0.0};
 
   /// \brief Set true if have 32 servo channels
   public: bool have32Channels{false};
@@ -436,6 +451,15 @@ void gz::sim::systems::ArduPilotPlugin::Reset(const UpdateInfo &_info,
             gz::sim::components::JointVelocityCmd({0}));
       }
     }
+
+    // The battery reads rotor speed, which is a different component from the
+    // command above and is not otherwise required by this plugin.
+    if (this->dataPtr->batteryEnabled &&
+        this->dataPtr->controls[i].type == "VELOCITY")
+    {
+      enableComponent<components::JointVelocity>(
+          _ecm, this->dataPtr->controls[i].joint, true);
+    }
   }
 }
 
@@ -519,6 +543,28 @@ void gz::sim::systems::ArduPilotPlugin::Configure(
 
     this->dataPtr->have32Channels =
     sdfClone->Get("have_32_channels", false).first;
+
+  // Simulated battery (optional). With --model JSON there is no SITL Frame, so
+  // ArduPilot cannot model the pack itself: declaring this element is what
+  // makes battery.voltage / battery.current appear in the state packet.
+  if (sdfClone->HasElement("battery"))
+  {
+    sdf::ElementPtr batterySDF = sdfClone->GetElement("battery");
+    const double cells = batterySDF->Get("cells", 6.0).first;
+    const double capacityAh = batterySDF->Get("capacityAh", 0.0).first;
+    const double resistance = batterySDF->Get("resistance", 0.013).first;
+    const double maxCurrent = batterySDF->Get("maxCurrent", 200.0).first;
+    this->dataPtr->powerCoefficient =
+        batterySDF->Get("powerCoefficient", 0.0).first;
+
+    this->dataPtr->battery.Setup(cells, capacityAh, resistance, maxCurrent);
+    this->dataPtr->batteryEnabled = true;
+
+    gzmsg << "[" << this->dataPtr->modelName << "] "
+          << "battery: " << cells << "S, " << capacityAh << " Ah, "
+          << resistance << " ohm, max " << maxCurrent << " A, "
+          << "powerCoefficient " << this->dataPtr->powerCoefficient << "\n";
+  }
 
   // Add the signal handler
   this->dataPtr->sigHandler.AddCallback(
@@ -1304,6 +1350,11 @@ void gz::sim::systems::ArduPilotPlugin::ApplyMotorForces(
     const double _dt,
     gz::sim::EntityComponentManager &_ecm)
 {
+  // Rotor speed cubed, summed over the rotors, for the battery model below.
+  // Control surfaces and the gimbal are left out: they are position servos
+  // drawing a rounding error next to the rotors.
+  double rotorSpeedCubed = 0.0;
+
   // update velocity PID for controls and apply force to joint
   for (size_t i = 0; i < this->dataPtr->controls.size(); ++i)
   {
@@ -1412,6 +1463,31 @@ void gz::sim::systems::ArduPilotPlugin::ApplyMotorForces(
         // do nothing
       }
     }
+  }
+
+  // Advance the pack on simulation time, so a paused world does not discharge
+  // it.
+  if (this->dataPtr->batteryEnabled)
+  {
+    for (size_t i = 0; i < this->dataPtr->controls.size(); ++i)
+    {
+      if (this->dataPtr->controls[i].type != "VELOCITY")
+      {
+        continue;
+      }
+      const components::JointVelocity *vComp =
+          _ecm.Component<components::JointVelocity>(
+              this->dataPtr->controls[i].joint);
+      if (vComp == nullptr || vComp->Data().empty())
+      {
+        continue;
+      }
+      const double speed = std::fabs(vComp->Data()[0]);
+      rotorSpeedCubed += speed * speed * speed;
+    }
+
+    this->dataPtr->battery.Update(
+        this->dataPtr->powerCoefficient * rotorSpeedCubed, _dt);
   }
 }
 
@@ -1962,6 +2038,20 @@ void gz::sim::systems::ArduPilotPlugin::CreateStateJSON(
     writer.Double(velWldA.Y());
     writer.Double(velWldA.Z());
     writer.EndArray();
+
+    // Battery. SIM_JSON takes these as the FDM's own reading and stops using
+    // its internal model, so send them only when we are actually simulating a
+    // pack.
+    if (this->dataPtr->batteryEnabled)
+    {
+      writer.Key("battery");
+      writer.StartObject();
+      writer.Key("voltage");
+      writer.Double(this->dataPtr->battery.Voltage());
+      writer.Key("current");
+      writer.Double(this->dataPtr->battery.Current());
+      writer.EndObject();
+    }
 
     // Range sensor
     {
